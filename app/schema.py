@@ -1,8 +1,8 @@
 from enum import Enum
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, List, Literal, Optional, Union, Dict
 
 from pydantic import BaseModel, Field
-
+import base64
 
 class Role(str, Enum):
     """Message role options"""
@@ -55,7 +55,8 @@ class Message(BaseModel):
     """Represents a chat message in the conversation"""
 
     role: ROLE_TYPE = Field(...)  # type: ignore
-    content: Optional[str] = Field(default=None)
+    # content: Optional[str] = Field(default=None)
+    content: Optional[Union[str, List[Dict[str, Any]]]] = Field(default=None)
     tool_calls: Optional[List[ToolCall]] = Field(default=None)
     name: Optional[str] = Field(default=None)
     tool_call_id: Optional[str] = Field(default=None)
@@ -133,6 +134,59 @@ class Message(BaseModel):
             role=Role.ASSISTANT, content=content, tool_calls=formatted_calls, **kwargs
         )
 
+    @classmethod
+    def user_message_with_image(
+        cls, 
+        text: str, 
+        image_url: str, 
+        detail: str = "auto"
+    ) -> "Message":
+        """Create a user message with text and an image."""
+        content = [
+            {"type": "text", "text": text},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": image_url,
+                    "detail": detail  # 支持细节控制（low/high/auto）
+                }
+            }
+        ]
+        return cls(role=Role.USER, content=content)
+    
+    @classmethod
+    def user_multimedia_message(
+        cls, 
+        content_list: List[Dict[str, Any]]
+    ) -> "Message":
+        """Create a custom user message with mixed content types."""
+        return cls(role=Role.USER, content=content_list)
+    
+    @classmethod
+    def user_message_with_local_image(
+        cls,
+        text: str,
+        image_path: str,
+        detail: str = "auto",
+        mime_type: str = "image/png"  
+    ) -> "Message":
+        """创建包含本地图片的消息（自动转为 base64）"""
+        # 读取图片并编码为 base64
+        with open(image_path, "rb") as image_file:
+            base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+        
+        # 构建符合 OpenAI 格式的内容
+        content = [
+            {"type": "text", "text": text},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{base64_image}",
+                    "detail": detail
+                }
+            }
+        ]
+        return cls(role=Role.USER, content=content)
 
 class Memory(BaseModel):
     messages: List[Message] = Field(default_factory=list)

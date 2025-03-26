@@ -10,6 +10,9 @@ from app.llm import LLM
 from app.logger import logger
 from app.schema import AgentState, Message, ToolChoice
 from app.tool import PlanningTool
+from app.tool.color import Color
+
+
 
 
 class PlanningFlow(BaseFlow):
@@ -115,8 +118,14 @@ class PlanningFlow(BaseFlow):
         )
 
         # Create a user message with the request
-        user_message = Message.user_message(
-            f"Create a reasonable plan with clear steps to accomplish the task: {request}"
+        # user_message = Message.user_message(
+        #     f"Create a reasonable plan with clear steps to accomplish the task: {request}"
+        # )
+
+        user_message = Message.user_message_with_local_image(
+            text=f"Create a reasonable plan with clear steps to accomplish the task: {request}",
+            image_path="img/test.png",
+            mime_type="image/png"
         )
 
         # Call LLM with PlanningTool
@@ -242,14 +251,16 @@ class PlanningFlow(BaseFlow):
 
         Please execute this step using the appropriate tools. When you're done, provide a summary of what you accomplished.
         """
+        print(Color.GREEN,plan_status,Color.RESET)
 
         # Use agent.run() to execute the step
         try:
             step_result = await executor.run(step_prompt)
-
+            # print(Color.BLUE,step_result,Color.RESET)
             # Mark the step as completed after successful execution
             await self._mark_step_completed()
-
+            plan_status = await self._get_plan_text()
+            print(Color.BLUE,plan_status,Color.RESET)
             return step_result
         except Exception as e:
             logger.error(f"Error executing step {self.current_step_index}: {e}")

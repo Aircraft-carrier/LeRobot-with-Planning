@@ -3,6 +3,21 @@ from typing import Dict, List, Literal, Optional
 
 from app.exceptions import ToolError
 from app.tool.base import BaseTool, ToolResult
+from app.prompt.lerobot import ACTIONBASE
+
+STEP_DESCRIPTION = f"""  
+
+{ACTIONBASE}  
+**Planning Requirements:**  
+- Build plans by chaining 2-5 Action Base steps.  
+- Ensure physical continuity (e.g. must open door before retrieving items).  
+- Verify step feasibility (e.g. required object availability).  
+- Prioritize efficient sequences (minimum necessary actions).  
+- Strictly use ONLY the 20 defined actions. 
+- If the task is not described in English, translate it into English first
+- If the task cannot be completed using actions from the Action Base, return 'I cannot complete this task.'  
+"""  
+
 
 
 _PLANNING_TOOL_DESCRIPTION = """
@@ -44,7 +59,7 @@ class PlanningTool(BaseTool):
                 "type": "string",
             },
             "steps": {
-                "description": "List of plan steps. Required for create command, optional for update command.",
+                "description": f"List of plan steps. Required for create command, optional for update command.{STEP_DESCRIPTION}",
                 "type": "array",
                 "items": {"type": "string"},
             },

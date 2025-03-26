@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 
 import tiktoken
 from openai import (
@@ -27,9 +27,15 @@ from app.schema import (
     ToolChoice,
 )
 
+import base64
+from io import BytesIO
+from PIL import Image
+import math
+import warnings
+
 
 REASONING_MODELS = ["o1", "o3-mini"]
-
+from app.tool.color import Color,format_chat_completion
 
 class LLM:
     _instances: Dict[str, "LLM"] = {}
@@ -81,11 +87,76 @@ class LLM:
             else:
                 self.client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
 
-    def count_tokens(self, text: str) -> int:
-        """Calculate the number of tokens in a text"""
-        if not text:
+    def count_tokens(self, content: Union[str, List[Dict[str, Any]]]) -> int:
+        """Calculate tokens for text/multimedia messages according to OpenAI rules"""
+        token_count = 0
+
+        def process_text(text: str) -> int:
+            """Process text segments"""
+            return len(self.tokenizer.encode(text)) if text else 0
+
+        def process_image(image_url: Dict[str, Any]) -> int:
+            """Process image segments according to GPT-4V rules"""
+            # Base token costs
+            detail = image_url.get("detail", "auto")
+            base_tokens = 85  # Base tokens for any image
+
+            # Handle different detail levels
+            if detail == "low":
+                return base_tokens
+            
+            # For high/auto detail, calculate tiles
+            try:
+                # Extract image data
+                if image_url["url"].startswith("data:"):
+                    header, data = image_url["url"].split(",", 1)
+                    image_data = base64.b64decode(data)
+                else:
+                    # For external URLs would need to download, here we skip
+                    warnings.warn("External image URLs require download, using default 85 tokens")
+                    return base_tokens * 2  # Conservative estimate
+
+                # Get image dimensions
+                with Image.open(BytesIO(image_data)) as img:
+                    width, height = img.size
+
+                # Calculate tiles (512x512 chunks)
+                tiles_width = math.ceil(width / 512)
+                tiles_height = math.ceil(height / 512)
+                total_tiles = tiles_width * tiles_height
+
+                # Token calculation formula
+                return base_tokens + (total_tiles * 170)
+            
+            except Exception as e:
+                warnings.warn(f"Image processing failed: {str(e)}, using base tokens")
+                return base_tokens
+
+        # Main processing logic
+        if isinstance(content, str):
+            # Plain text message
+            return process_text(content)
+        
+        elif isinstance(content, list):
+            # Multimedia message
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                
+                if item.get("type") == "text":
+                    token_count += process_text(item.get("text", ""))
+                
+                elif item.get("type") == "image_url":
+                    token_count += process_image(item.get("image_url", {}))
+                
+                else:
+                    warnings.warn(f"Unsupported content type: {item.get('type')}")
+            
+            return token_count
+        
+        else:
+            warnings.warn("Unsupported content format")
             return 0
-        return len(self.tokenizer.encode(text))
 
     def count_message_tokens(self, messages: List[dict]) -> int:
         """Calculate the number of tokens in a message list"""
@@ -97,11 +168,9 @@ class LLM:
             # Calculate tokens for the role
             if "role" in message:
                 token_count += self.count_tokens(message["role"])
-
             # Calculate tokens for the content
             if "content" in message and message["content"]:
                 token_count += self.count_tokens(message["content"])
-
             # Calculate tokens for tool calls
             if "tool_calls" in message and message["tool_calls"]:
                 for tool_call in message["tool_calls"]:
@@ -362,10 +431,8 @@ class LLM:
                 messages = system_msgs + self.format_messages(messages)
             else:
                 messages = self.format_messages(messages)
-
             # Calculate input token count
             input_tokens = self.count_message_tokens(messages)
-
             # If there are tools, calculate token count for tool descriptions
             tools_tokens = 0
             if tools:
@@ -373,19 +440,17 @@ class LLM:
                     tools_tokens += self.count_tokens(str(tool))
 
             input_tokens += tools_tokens
-
             # Check if token limits are exceeded
             if not self.check_token_limit(input_tokens):
                 error_message = self.get_limit_error_message(input_tokens)
                 # Raise a special exception that won't be retried
                 raise TokenLimitExceeded(error_message)
-
             # Validate tools if provided
             if tools:
                 for tool in tools:
                     if not isinstance(tool, dict) or "type" not in tool:
                         raise ValueError("Each tool must be a dict with 'type' field")
-
+                    
             # Set up the completion request
             params = {
                 "model": self.model,
@@ -405,7 +470,7 @@ class LLM:
                 )
 
             response = await self.client.chat.completions.create(**params)
-
+            # print(Color.CYAN,format_chat_completion(response),Color.RESET)
             # Check if response is valid
             if not response.choices or not response.choices[0].message:
                 print(response)
