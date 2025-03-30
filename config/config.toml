@@ -1,0 +1,7 @@
+[llm]
+model = "qwen-plus"     # The LLM model to use
+base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"    # API endpoint URL
+api_key = "sk-894e4555026b4c57b95aa35792ba5e90"   
+max_tokens = 8192     
+temperature = 0.0    
+#max_input_tokens = 100000  

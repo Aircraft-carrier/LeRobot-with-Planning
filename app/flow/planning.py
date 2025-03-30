@@ -13,7 +13,7 @@ from app.tool import PlanningTool
 from app.tool.color import Color
 from app.tool.action_planning import ActionPlanningTool
 from app.tool.plan_validator import PlanValidator
-
+import os
 
 
 class PlanningFlow(BaseFlow):
@@ -122,15 +122,16 @@ class PlanningFlow(BaseFlow):
         )
 
         # Create a user message with the request
-        # user_message = Message.user_message(
-        #     f"Create a reasonable plan with clear steps to accomplish the task: {request}"
-        # )
-
-        user_message = Message.user_message_with_local_image(
-            text=f"Create a reasonable plan with clear steps to accomplish the task: {request}",
-            image_path="img/test.png",
-            mime_type="image/png"
-        )
+        if os.path.exists("img/test.png"):
+            user_message = Message.user_message_with_local_image(
+                text=f"Create a reasonable plan with clear steps to accomplish the task: {request}",
+                image_path="img/test.png",
+                mime_type="image/png"
+            )
+        else:
+            user_message = Message.user_message(
+                f"Create a reasonable plan with clear steps to accomplish the task: {request}"
+            )
 
         # Call LLM with PlanningTool
         response = await self.llm.ask_tool(
