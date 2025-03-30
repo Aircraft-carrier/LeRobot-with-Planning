@@ -38,6 +38,7 @@ class ToolResult(BaseModel):
     output: Any = Field(default=None)
     error: Optional[str] = Field(default=None)
     system: Optional[str] = Field(default=None)
+    metadata: Any = Field(default=None)
 
     class Config:
         arbitrary_types_allowed = True

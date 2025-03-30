@@ -28,40 +28,113 @@ class LLMSettings(BaseModel):
     api_version: str = Field(..., description="Azure Openai version if AzureOpenai")
 
 
+# class ActionConfig(BaseModel):
+#     actions: Dict[int, str] = Field(
+#         default_factory=dict,
+#         description="Action ID to description mapping"
+#     )
+    
+#     @property
+#     def count(self) -> int:
+#         """Returns the total number of available actions"""
+#         return len(self.actions)
+    
+#     def format_for_prompt(self, include_ids: bool = True) -> str:
+#         if not self.actions:
+#             return "No available actions"
+            
+#         sorted_actions = sorted(self.actions.items())
+#         max_num_width = len(str(len(sorted_actions)))
+        
+#         lines = []
+#         for idx, (action_id, desc) in enumerate(sorted_actions, 1):
+#             prefix = f"[ID:{action_id}] " if include_ids else ""
+#             lines.append(
+#                 f"{prefix}{desc.strip().rstrip('.')}"
+#             )
+            
+#         return f"""     ## Available Actions (Total: {self.count}):\n{"\n".join(lines)}
+#             """
+    
 class ActionConfig(BaseModel):
     actions: Dict[int, str] = Field(
-        default_factory=dict,
-        description="Action ID to description mapping"
+        ...,
+        description="Mapping of action IDs to descriptions"
     )
-    
+    preconditions: Dict[int, List[str]] = Field(
+        default_factory=dict,
+        description="Optional mapping of action IDs to their preconditions"
+    )
+
     @property
     def count(self) -> int:
         """Returns the total number of available actions"""
         return len(self.actions)
-    
-    def format_for_prompt(self, include_ids: bool = True) -> str:
-        if not self.actions:
-            return "No available actions"
+
+    @classmethod
+    def load_from_json(cls, file_path: Path) -> "ActionConfig":
+        """智能加载方法，处理可选前置条件"""
+        try:
+            with open(file_path, 'r') as f:
+                raw_data = json.load(f)
+                
+            action_mapping = {}
+            precond_mapping = {}
             
-        sorted_actions = sorted(self.actions.items())
-        max_num_width = len(str(len(sorted_actions)))
-        
-        lines = []
-        for idx, (action_id, desc) in enumerate(sorted_actions, 1):
-            prefix = f"[ID:{action_id}] " if include_ids else ""
-            lines.append(
-                f"{prefix}{desc.strip().rstrip('.')}"
+            for action_id_str, data in raw_data.items():
+                action_id = int(action_id_str)
+                
+                # 强制要求action字段
+                if "action" not in data:
+                    raise ValueError(f"Missing 'action' for action {action_id}")
+                action_mapping[action_id] = data["action"]
+                
+                # 可选处理前置条件
+                if "preconditions" in data:
+                    if not isinstance(data["preconditions"], list):
+                        raise ValueError(f"Invalid preconditions type for action {action_id}")
+                    precond_mapping[action_id] = [
+                        p.strip() for p in data["preconditions"] 
+                        if isinstance(p, str)
+                    ]
+            
+            return cls(
+                actions=action_mapping,
+                preconditions=precond_mapping
             )
             
-        return f"""     ## Available Actions (Total: {self.count}):\n{"\n".join(lines)}
-            """
-        
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON format")
+        except KeyError as e:
+            raise ValueError(f"Missing key in JSON: {str(e)}")
+
+    def format_for_prompt(self) -> str:
+        """生成带可选前置条件的格式化输出"""
+        output = []
+        for action_id in sorted(self.actions.keys()):
+            desc = self.actions[action_id]
+            preconds = self.preconditions.get(action_id, [])
+            
+            action_entry = f"[ID:{action_id}] {desc}"
+            if preconds:
+                action_entry += "\npreconditions :\n" + "\n".join(
+                    f"  • {p}" for p in preconds
+                )
+            output.append(action_entry)
+        criteria = [
+            "1. If the task is To place an item in the refrigerator, first open the refrigerator door, then take the item."
+        ]
+        return f"""     ## Available Actions (Total: {self.count}):\ncriteria\n{"\n".join(criteria)}\n\n{"\n\n".join(output)}"""
 
 class AppConfig(BaseModel):
     llm: Dict[str, LLMSettings]
     action: ActionConfig = Field(
         default_factory=ActionConfig,
         description="Action configurations"
+    )
+    action_src: ActionConfig = Field(
+        default_factory=ActionConfig,
+        description="Action src configurations"
     )
 
     class Config:
@@ -135,7 +208,8 @@ class Config:
         }
 
         # 加载动作配置
-        action_config = ActionConfig(actions=self._load_actions())
+        action_src_config = ActionConfig(actions=self._load_actions())
+        action_config = ActionConfig.load_from_json(Path("config/action_base.json"))
 
         config_dict = {
             "llm": {
@@ -145,7 +219,8 @@ class Config:
                     for name, override_config in llm_overrides.items()
                 },
             },
-            "action": action_config
+            "action": action_config,
+            "action_src": action_src_config
         }
 
         self._config = AppConfig(**config_dict)
@@ -157,5 +232,9 @@ class Config:
     @property
     def action(self) -> ActionConfig:
         return self._config.action
+    
+    @property
+    def action_src(self) -> ActionConfig:
+        return self._config.action_src
 
 config = Config()

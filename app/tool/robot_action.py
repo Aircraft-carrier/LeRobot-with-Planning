@@ -8,20 +8,9 @@ from app.prompt.lerobot import ACTIONBASE as ActionBase
 from app.config import config
 
 CLI_ = '''
-python lerobot/scripts/control_robot.py \
-  --robot.type=so100 \
-  --control.type=record \
-  --control.fps=30 \
-  --control.single_task="{Action}" \
-  --control.repo_id=$HF_USER/eval_act_so100_test \
-  --control.tags='["tutorial"]' \
-  --control.warmup_time_s=5 \
-  --control.episode_time_s=30 \
-  --control.reset_time_s=30 \
-  --control.num_episodes=10 \
-  --control.push_to_hub=true \
-  --control.policy.path=outputs/train/act_so100_test/checkpoints/last/pretrained_model
+./action.sh 
   '''
+
 CLI= '''
 python -u robot.py \
  --action="{Action}" 
@@ -58,7 +47,7 @@ Users need to provide an action ID between 1 and {config.action.count}, and the 
             return CLIResult(output="", error="Missing action ID parameter")
         
         if action_id not in actions:
-            return CLIResult(output="", error=f"Invalid action ID: {action_id} (valid range: 1-20)")
+            return CLIResult(output="", error=f"Invalid action ID: {action_id} (valid range: 1-{config.action.count})")
         
         action_desc = actions[action_id]
         safe_action = shlex.quote(action_desc)
