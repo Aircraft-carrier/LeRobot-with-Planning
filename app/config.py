@@ -2,9 +2,8 @@ import threading
 import tomllib
 from pathlib import Path
 from typing import Dict, List, Optional
-
+import json
 from pydantic import BaseModel, Field
-
 
 def get_project_root() -> Path:
     """Get the project root directory"""
@@ -29,50 +28,44 @@ class LLMSettings(BaseModel):
     api_version: str = Field(..., description="Azure Openai version if AzureOpenai")
 
 
-class ProxySettings(BaseModel):
-    server: str = Field(None, description="Proxy server address")
-    username: Optional[str] = Field(None, description="Proxy username")
-    password: Optional[str] = Field(None, description="Proxy password")
-
-
-class SearchSettings(BaseModel):
-    engine: str = Field(default="Google", description="Search engine the llm to use")
-
-
-class BrowserSettings(BaseModel):
-    headless: bool = Field(False, description="Whether to run browser in headless mode")
-    disable_security: bool = Field(
-        True, description="Disable browser security features"
+class ActionConfig(BaseModel):
+    actions: Dict[int, str] = Field(
+        default_factory=dict,
+        description="Action ID to description mapping"
     )
-    extra_chromium_args: List[str] = Field(
-        default_factory=list, description="Extra arguments to pass to the browser"
-    )
-    chrome_instance_path: Optional[str] = Field(
-        None, description="Path to a Chrome instance to use"
-    )
-    wss_url: Optional[str] = Field(
-        None, description="Connect to a browser instance via WebSocket"
-    )
-    cdp_url: Optional[str] = Field(
-        None, description="Connect to a browser instance via CDP"
-    )
-    proxy: Optional[ProxySettings] = Field(
-        None, description="Proxy settings for the browser"
-    )
-
+    
+    @property
+    def count(self) -> int:
+        """Returns the total number of available actions"""
+        return len(self.actions)
+    
+    def format_for_prompt(self, include_ids: bool = True) -> str:
+        if not self.actions:
+            return "No available actions"
+            
+        sorted_actions = sorted(self.actions.items())
+        max_num_width = len(str(len(sorted_actions)))
+        
+        lines = []
+        for idx, (action_id, desc) in enumerate(sorted_actions, 1):
+            prefix = f"[ID:{action_id}] " if include_ids else ""
+            lines.append(
+                f"{prefix}{desc.strip().rstrip('.')}"
+            )
+            
+        return f"""     ## Available Actions (Total: {self.count}):\n{"\n".join(lines)}
+            """
+        
 
 class AppConfig(BaseModel):
     llm: Dict[str, LLMSettings]
-    browser_config: Optional[BrowserSettings] = Field(
-        None, description="Browser configuration"
-    )
-    search_config: Optional[SearchSettings] = Field(
-        None, description="Search configuration"
+    action: ActionConfig = Field(
+        default_factory=ActionConfig,
+        description="Action configurations"
     )
 
     class Config:
         arbitrary_types_allowed = True
-
 
 class Config:
     _instance = None
@@ -105,6 +98,17 @@ class Config:
             return example_path
         raise FileNotFoundError("No configuration file found in config directory")
 
+    def _load_actions(self) -> Dict[int, str]:
+        actions_path = PROJECT_ROOT / "config" / "actions.json"
+        try:
+            with open(actions_path, 'r') as f:
+                action_dict = json.load(f)
+                return {int(k): v for k, v in action_dict.items()}
+        except FileNotFoundError:
+            raise RuntimeError(f"Actions file not found at {actions_path}")
+        except json.JSONDecodeError:
+            raise RuntimeError("Invalid JSON format in actions file")
+
     def _load_config(self) -> dict:
         config_path = self._get_config_path()
         with config_path.open("rb") as f:
@@ -112,6 +116,8 @@ class Config:
 
     def _load_initial_config(self):
         raw_config = self._load_config()
+        
+        # 加载LLM配置
         base_llm = raw_config.get("llm", {})
         llm_overrides = {
             k: v for k, v in raw_config.get("llm", {}).items() if isinstance(v, dict)
@@ -128,54 +134,18 @@ class Config:
             "api_version": base_llm.get("api_version", ""),
         }
 
-        # handle browser config.
-        browser_config = raw_config.get("browser", {})
-        browser_settings = None
-
-        if browser_config:
-            # handle proxy settings.
-            proxy_config = browser_config.get("proxy", {})
-            proxy_settings = None
-
-            if proxy_config and proxy_config.get("server"):
-                proxy_settings = ProxySettings(
-                    **{
-                        k: v
-                        for k, v in proxy_config.items()
-                        if k in ["server", "username", "password"] and v
-                    }
-                )
-
-            # filter valid browser config parameters.
-            valid_browser_params = {
-                k: v
-                for k, v in browser_config.items()
-                if k in BrowserSettings.__annotations__ and v is not None
-            }
-
-            # if there is proxy settings, add it to the parameters.
-            if proxy_settings:
-                valid_browser_params["proxy"] = proxy_settings
-
-            # only create BrowserSettings when there are valid parameters.
-            if valid_browser_params:
-                browser_settings = BrowserSettings(**valid_browser_params)
-
-        search_config = raw_config.get("search", {})
-        search_settings = None
-        if search_config:
-            search_settings = SearchSettings(**search_config)
+        # 加载动作配置
+        action_config = ActionConfig(actions=self._load_actions())
 
         config_dict = {
             "llm": {
                 "default": default_settings,
                 **{
-                    name: {**default_settings, **override_config}
+                    name: {**default_settings,**override_config}
                     for name, override_config in llm_overrides.items()
                 },
             },
-            "browser_config": browser_settings,
-            "search_config": search_settings,
+            "action": action_config
         }
 
         self._config = AppConfig(**config_dict)
@@ -185,12 +155,7 @@ class Config:
         return self._config.llm
 
     @property
-    def browser_config(self) -> Optional[BrowserSettings]:
-        return self._config.browser_config
-
-    @property
-    def search_config(self) -> Optional[SearchSettings]:
-        return self._config.search_config
-
+    def action(self) -> ActionConfig:
+        return self._config.action
 
 config = Config()

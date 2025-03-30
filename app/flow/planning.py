@@ -11,7 +11,8 @@ from app.logger import logger
 from app.schema import AgentState, Message, ToolChoice
 from app.tool import PlanningTool
 from app.tool.color import Color
-
+from app.tool.action_planning import ActionPlanningTool
+from app.tool.plan_validator import PlanValidator
 
 
 
@@ -19,10 +20,12 @@ class PlanningFlow(BaseFlow):
     """A flow that manages planning and execution of tasks using agents."""
 
     llm: LLM = Field(default_factory=lambda: LLM())
-    planning_tool: PlanningTool = Field(default_factory=PlanningTool)
+    # planning_tool: PlanningTool = Field(default_factory=PlanningTool)
+    planning_tool:  ActionPlanningTool = Field(default_factory=ActionPlanningTool)
     executor_keys: List[str] = Field(default_factory=list)
     active_plan_id: str = Field(default_factory=lambda: f"plan_{int(time.time())}")
     current_step_index: Optional[int] = None
+    plan_validator: PlanValidator = Field(default_factory=PlanValidator)
 
     def __init__(
         self, agents: Union[BaseAgent, List[BaseAgent], Dict[str, BaseAgent]], **data
@@ -37,7 +40,8 @@ class PlanningFlow(BaseFlow):
 
         # Initialize the planning tool if not provided
         if "planning_tool" not in data:
-            planning_tool = PlanningTool()
+            # planning_tool = PlanningTool()
+            planning_tool = ActionPlanningTool()
             data["planning_tool"] = planning_tool
 
         # Call parent's init with the processed data
@@ -139,7 +143,8 @@ class PlanningFlow(BaseFlow):
         # Process tool calls if present
         if response.tool_calls:
             for tool_call in response.tool_calls:
-                if tool_call.function.name == "planning":
+                # if tool_call.function.name == "planning":
+                if tool_call.function.name == "action_planning":
                     # Parse the arguments
                     args = tool_call.function.arguments
                     if isinstance(args, str):
@@ -154,20 +159,22 @@ class PlanningFlow(BaseFlow):
 
                     # Execute the tool via ToolCollection instead of directly
                     result = await self.planning_tool.execute(**args)
-
-                    logger.info(f"Plan creation result: {str(result)}")
-                    return
+                    plan_pass = await self.plan_validator.execute(task=request,
+                                                                  plans=self.planning_tool.plan_to_prompt(self.active_plan_id))
+                    if plan_pass.output: 
+                        logger.info(f"Plan creation result: {str(result)}")
+                        return
 
         # If execution reached here, create a default plan
         logger.warning("Creating default plan")
-
+        await self.planning_tool.execute(command="delete",plan_id=self.active_plan_id)
         # Create default plan using the ToolCollection
         await self.planning_tool.execute(
             **{
                 "command": "create",
                 "plan_id": self.active_plan_id,
                 "title": f"Plan for: {request[:50]}{'...' if len(request) > 50 else ''}",
-                "steps": ["Analyze request", "Execute task", "Verify results"],
+                "steps": ["Reply that I am unable to complete this task."],
             }
         )
 

@@ -1,96 +1,62 @@
-# tool/planning.py
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional,Union
 
 from app.exceptions import ToolError
 from app.tool.base import BaseTool, ToolResult
+from app.config import config, ActionConfig
 
 
-STEP_DESCRIPTION = f"""   
-**Planning Requirements:**  
-- Build plans by chaining 2-5 Action Base steps.  
-- Ensure physical continuity (e.g. must open door before retrieving items).  
-- Verify step feasibility (e.g. required object availability).  
-- Prioritize efficient sequences (minimum necessary actions).  
-- Strictly use ONLY the 20 defined actions. 
-- If the task is not described in English, translate it into English first
-- If the task cannot be completed using actions from the Action Base, return 'I cannot complete this task.'  
-"""  
+_PLANNING_TOOL_DESCRIPTION = f"""
+1. Use this tool to create action plans by selecting from available actions.
+2. The plan will consist of a sequence of action IDs(1 to {config.action.count}) that will be executed in order.
+3. Ensure physical continuity while optimizing for minimal actions.
+4. Returns 0 if the task cannot be accomplished using the existing action library.
+{config.action.format_for_prompt()}
 
-
-
-_PLANNING_TOOL_DESCRIPTION = """
-A planning tool that allows the agent to create and manage plans for solving complex tasks.
-The tool provides functionality for creating plans, updating plan steps, and tracking progress.
 """
 
 
-class PlanningTool(BaseTool):
+class ActionPlanningTool(BaseTool):
     """
-    A planning tool that allows the agent to create and manage plans for solving complex tasks.
-    The tool provides functionality for creating plans, updating plan steps, and tracking progress.
+    A planning tool that allows the agent to create action plans by selecting from available actions.
+    The tool provides functionality for creating plans using predefined actions.
     """
 
-    name: str = "planning"
+    name: str = "action_planning"
     description: str = _PLANNING_TOOL_DESCRIPTION
     parameters: dict = {
         "type": "object",
         "properties": {
-            "command": {
-                "description": "The command to execute. Available commands: create, update, list, get, set_active, mark_step, delete.",
-                "enum": [
-                    "create",
-                    "update",
-                    "list",
-                    "get",
-                    "set_active",
-                    "mark_step",
-                    "delete",
-                ],
-                "type": "string",
-            },
             "plan_id": {
-                "description": "Unique identifier for the plan. Required for create, update, set_active, and delete commands. Optional for get and mark_step (uses active plan if not specified).",
+                "description": "Unique identifier for the plan (required).",
                 "type": "string",
             },
             "title": {
-                "description": "Title for the plan. Required for create command, optional for update command.",
+                "description": "Title describing the purpose of this action plan (required).",
                 "type": "string",
             },
             "steps": {
-                "description": f"List of plan steps. Required for create command, optional for update command.{STEP_DESCRIPTION}",
+                "description": "List of action IDs to execute in order (must be valid action IDs from available actions).",
                 "type": "array",
-                "items": {"type": "string"},
-            },
-            "step_index": {
-                "description": "Index of the step to update (0-based). Required for mark_step command.",
-                "type": "integer",
-            },
-            "step_status": {
-                "description": "Status to set for a step. Used with mark_step command.",
-                "enum": ["not_started", "in_progress", "completed", "blocked"],
-                "type": "string",
-            },
-            "step_notes": {
-                "description": "Additional notes for a step. Optional for mark_step command.",
-                "type": "string",
+                "items": {"type": "integer"},
             },
         },
-        "required": ["command"],
+        "required": ["plan_id", "title", "steps"],
         "additionalProperties": False,
     }
 
-    plans: dict = {}  # Dictionary to store plans by plan_id
-    _current_plan_id: Optional[str] = None  # Track the current active plan
+    plans: dict = {}  
+    _current_plan_id: Optional[str] = None 
+    action_config: ActionConfig = config.action
 
     async def execute(
         self,
         *,
         command: Literal[
             "create", "update", "list", "get", "set_active", "mark_step", "delete"
-        ],
+        ] = "create",
         plan_id: Optional[str] = None,
         title: Optional[str] = None,
-        steps: Optional[List[str]] = None,
+        steps: Union[List[int],List[str]] = None,
         step_index: Optional[int] = None,
         step_status: Optional[
             Literal["not_started", "in_progress", "completed", "blocked"]
@@ -129,46 +95,63 @@ class PlanningTool(BaseTool):
             raise ToolError(
                 f"Unrecognized command: {command}. Allowed commands are: create, update, list, get, set_active, mark_step, delete"
             )
-
+        
     def _create_plan(
-        self, plan_id: Optional[str], title: Optional[str], steps: Optional[List[str]]
+        self, plan_id: Optional[str], title: Optional[str], steps: Union[List[int],List[str]]
     ) -> ToolResult:
-        """Create a new plan with the given ID, title, and steps."""
-        if not plan_id:
-            raise ToolError("Parameter `plan_id` is required for command: create")
+        """
+        Create a new action plan with the given ID, title, and action sequence.
+
+        Parameters:
+        - plan_id: Unique identifier for the plan
+        - title: Title describing the plan's purpose
+        - steps: List of action IDs to execute in order
+        """
+
+        # Validate action IDs exist
+        if steps and isinstance(steps[0], int):
+            invalid_actions = [action_id for action_id in steps if action_id not in self.action_config.actions]
+            if invalid_actions:
+                available_actions = self.action_config.format_for_prompt()
+                raise ToolError(
+                    f"Invalid action IDs: {invalid_actions}. These actions don't exist.\n\n"
+                    f"{available_actions}"
+                )
 
         if plan_id in self.plans:
-            raise ToolError(
-                f"A plan with ID '{plan_id}' already exists. Use 'update' to modify existing plans."
-            )
-
+            raise ToolError(f"A plan with ID '{plan_id}' already exists.")
+        
         if not title:
             raise ToolError("Parameter `title` is required for command: create")
 
-        if (
-            not steps
-            or not isinstance(steps, list)
-            or not all(isinstance(step, str) for step in steps)
-        ):
-            raise ToolError(
-                "Parameter `steps` must be a non-empty list of strings for command: create"
-            )
+        # Convert action IDs to their descriptions for the plan
+        step_descriptions = [
+            self.action_config.actions[action_id]
+            for action_id in steps
+        ] if isinstance(steps[0], int) else steps
 
         # Create a new plan with initialized step statuses
         plan = {
             "plan_id": plan_id,
             "title": title,
-            "steps": steps,
+            "steps": step_descriptions,
             "step_statuses": ["not_started"] * len(steps),
             "step_notes": [""] * len(steps),
         }
 
         self.plans[plan_id] = plan
-        self._current_plan_id = plan_id  # Set as active plan
+        self._current_plan_id = plan_id  
 
         return ToolResult(
-            output=f"Plan created successfully with ID: {plan_id}\n\n{self._format_plan(plan)}"
+            output=f"Action plan created successfully with ID: {plan_id}\n\n{self._format_plan(plan)}"
         )
+    
+    def plan_to_prompt(self, plan_id: Optional[str])->str:
+        return "\n".join(f"{i}. {step}" for i, step in enumerate(self.plans[plan_id]["steps"]))
+
+    def get_available_actions_prompt(self) -> str:
+        """Returns a formatted string of available actions for inclusion in prompts."""
+        return self.action_config.format_for_prompt()
 
     def _update_plan(
         self, plan_id: Optional[str], title: Optional[str], steps: Optional[List[str]]

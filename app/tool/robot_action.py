@@ -1,11 +1,11 @@
 import asyncio
 import os
 import shlex
-from typing import Optional
-
+from typing import Optional, Dict
 from app.tool.base import BaseTool, CLIResult
-from app.tool.color import Color,display_code
+from app.tool.color import Color
 from app.prompt.lerobot import ACTIONBASE as ActionBase
+from app.config import config
 
 CLI_ = '''
 python lerobot/scripts/control_robot.py \
@@ -28,32 +28,22 @@ python -u robot.py \
 '''
 
 
-actions = {}
-for line in ActionBase.strip().split('\n'):
-    line = line.strip()
-    if line and line[0].isdigit():
-        parts = line.split('. ', 1)
-        if len(parts) == 2:
-            try:
-                action_id = int(parts[0])
-                actions[action_id] = parts[1].strip()
-            except ValueError:
-                continue
+actions:Dict[int,str] = config.action.actions
 
 
 class RobotAction(BaseTool):
     name: str = "Robot_action"
     description: str = f""" Robot action execution tool, used to control the robot to complete 20 predefined daily action tasks.
-Users need to provide an action ID between 1 and 20, and the tool will automatically execute the corresponding robot control script.
-{ActionBase}
-""".format(ActionBase=ActionBase)
+Users need to provide an action ID between 1 and {config.action.count}, and the tool will automatically execute the corresponding robot control script.
+{config.action.format_for_prompt()}
+"""
     parameters: dict = {
         "type": "object",
         "properties": {
             "action_id": {
                 "type": "int",
                 "minimum": 1,
-                "maximum": 25,
+                "maximum": config.action.count,
                 "description": "Predefined action ID numbers (integers between 1 and 20)",
             }
         },
